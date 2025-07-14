@@ -225,7 +225,15 @@ cloudinary.config(
 )
 
 CLOUDINARY_STORAGE = {
-    'CLOUD_NAME': 'dxdmobj4v',
-    'API_KEY': '646695939138698',
-    'API_SECRET': 'a1KZpv5H1H5f5-91X_3tcAUYzmo'
+    'CLOUD_NAME': os.getenv('CLOUDINARY_CLOUD_NAME'),
+    'API_KEY': os.getenv('CLOUDINARY_API_KEY'),
+    'API_SECRET': os.getenv('CLOUDINARY_API_SECRET'),
+    'SECURE': True,
+    'MEDIA_TAG': 'media',
+    'INVALID_VIDEO_ERROR_MESSAGE': 'Please upload a valid video file',
+    'EXCLUDE_DELETE_ORPHANED_MEDIA_PATHS': (),
+    'STATIC_TAG': 'static',
+    'STATICFILES_MANIFEST_ROOT': os.path.join(BASE_DIR, 'manifest'),
+    'STATIC_IMAGES_EXTENSIONS': ['jpg', 'jpeg', 'png'],
+    'STATIC_VIDEOS_EXTENSIONS': ['mp4', 'webm'],
 }
