@@ -28,7 +28,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = 'django-insecure-sm4_o$%#fl*t((*#4tgmzp=@d%djqaxuva=t#u9#i$^p*ex8jf'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = False
 
 
 ALLOWED_HOSTS = [
@@ -145,15 +145,22 @@ SIMPLE_JWT = {
     # 'AUTH_HEADER_NAME': 'HTTP_AUTHORIZATION',
 }
 
+# DATABASES = {
+#     'default': {
+#         'ENGINE': 'django.db.backends.postgresql',
+#         'NAME': 'postgres',
+#         'USER': 'postgres.gfgsazkebkfrfnkljaot',
+#         'PASSWORD': 'mark3661.1',
+#         'HOST': 'aws-0-eu-north-1.pooler.supabase.com',
+#         'PORT': '5432',
+#     }
+# }
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'postgres',
-        'USER': 'postgres.gfgsazkebkfrfnkljaot',
-        'PASSWORD': 'mark3661.1',
-        'HOST': 'aws-0-eu-north-1.pooler.supabase.com',
-        'PORT': '5432',
-    }
+    'default': dj_database_url.config(
+        default=os.getenv('DATABASE_URL'),  # From environment variables
+        conn_max_age=600,  # Connection persistence
+        ssl_require=True  # Critical for Supabase
+    )
 }
 
 
