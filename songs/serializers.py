@@ -89,22 +89,62 @@ class PlaylistSerializer(serializers.ModelSerializer):
         fields = ('id', 'name', 'user', 'tracks', 'created_at', 'updated_at')
 
 
+# class ProfileSerializer(serializers.ModelSerializer):
+#     user_id = serializers.ReadOnlyField(source='user.id')
+#     class Meta:
+#         model = Profile
+#         fields = ['bio','user_id', 'birth_date', 'location', 'is_public', 'picture',]
+
+#     def create(self, validated_data):
+#         user = self.context['request'].user  # Access user from request
+#         # Remove 'user' from validated_data if it exists
+#         profile = Profile.objects.create(user=user, **validated_data)
+#         return profile
+#     def get_picture(self, obj):
+#         if obj.picture:
+#             request = self.context.get('request')
+#             return request.build_absolute_uri(obj.picture.url) if request else obj.picture.url
+#         return None
 class ProfileSerializer(serializers.ModelSerializer):
     user_id = serializers.ReadOnlyField(source='user.id')
+    picture = serializers.SerializerMethodField()
+    
     class Meta:
         model = Profile
-        fields = ['bio','user_id', 'birth_date', 'location', 'is_public', 'picture',]
+        fields = ['bio', 'user_id', 'birth_date', 'location', 'is_public', 'picture']
+        extra_kwargs = {
+            'picture': {'write_only': True}  # Only needed for uploads
+        }
+
+    def get_picture(self, obj):
+        """Handles all possible Cloudinary response formats"""
+        if not obj.picture:
+            return None
+            
+        try:
+            # Case 1: Cloudinary resource dictionary
+            if isinstance(obj.picture, dict):
+                return obj.picture.get('secure_url') or obj.picture.get('url')
+            
+            # Case 2: CloudinaryField with url property
+            if hasattr(obj.picture, 'url'):
+                return obj.picture.url
+                
+            # Case 3: Direct URL string
+            return str(obj.picture)
+        except Exception as e:
+            print(f"Error processing picture URL: {e}")
+            return None
 
     def create(self, validated_data):
-        user = self.context['request'].user  # Access user from request
-        # Remove 'user' from validated_data if it exists
-        profile = Profile.objects.create(user=user, **validated_data)
-        return profile
-    def get_picture(self, obj):
-        if obj.picture:
-            request = self.context.get('request')
-            return request.build_absolute_uri(obj.picture.url) if request else obj.picture.url
-        return None
+        """Handles profile creation with request context"""
+        try:
+            user = self.context['request'].user
+            profile = Profile.objects.create(user=user, **validated_data)
+            return profile
+        except Exception as e:
+            print(f"Profile creation error: {e}")
+            raise serializers.ValidationError("Profile creation failed")
 
 class CommentSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
@@ -126,10 +166,6 @@ class CategorySerializer(serializers.ModelSerializer):
     class Meta:
         model = Category
         fields = ('id', 'name', 'created_at', 'updated_at')
-
-
-
-
 
 
 # Add these new serializers after your existing ones
