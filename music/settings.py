@@ -158,9 +158,9 @@ SIMPLE_JWT = {
 # }
 DATABASES = {
     'default': dj_database_url.config(
-        default=os.getenv('DATABASE_URL'),  # From environment variables
-        conn_max_age=600,  # Connection persistence
-        ssl_require=True  # Critical for Supabase
+        default=os.getenv('DATABASE_URL'),
+        conn_max_age=600,
+        ssl_require=True  # Essential for Supabase
     )
 }
 
