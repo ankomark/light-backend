@@ -57,9 +57,6 @@ from .serializers import (
     LiveEventSerializer
 
 
-
-
-
 )
 import logging
 import time
