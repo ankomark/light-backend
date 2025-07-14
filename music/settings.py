@@ -32,11 +32,12 @@ DEBUG = True
 
 
 ALLOWED_HOSTS = [
+    'light-backend-production.up.railway.app',
     '192.168.1.126',
     'localhost',
     '127.0.0.1',
-    'your-production-domain.com',
-    'your-app-name.onrender.com'
+    '.railway.app'
+   
 ]
 
 
@@ -60,6 +61,7 @@ CORS_ALLOW_ALL_ORIGINS = True
 
 # Application definition
 CORS_ALLOWED_ORIGINS = [
+    'https://light-backend-production.up.railway.app',
     "http://localhost:19006",
     "http://192.168.1.126"  # Adjust for your network
     
