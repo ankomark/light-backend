@@ -9,7 +9,6 @@ class UserSerializer(serializers.ModelSerializer):
     followers_count = serializers.SerializerMethodField()
     following_count = serializers.SerializerMethodField()
     is_following = serializers.SerializerMethodField()
-    profile = serializers.SerializerMethodField() 
     class Meta:
         model = User
         fields = ('id', 'username', 'email',  'password','profile','followers_count', 'following_count', 'is_following')
@@ -59,7 +58,13 @@ class TrackSerializer(serializers.ModelSerializer):
         if user.is_authenticated:
             return obj.likes.filter(user=user).exists()
         return False
-    
+    #  def get_serializer_context(self):
+    #     context = super().get_serializer_context()
+    #     context['request'] = self.request
+    #     # Add owner flag for direct API use
+    #     if self.action == 'retrieve':
+    #         context['is_owner'] = self.get_object().artist == self.request.user
+    #     return context
      def get_is_owner(self, obj):
         request = self.context.get('request')
         return request and obj.artist == request.user
@@ -67,7 +72,13 @@ class TrackSerializer(serializers.ModelSerializer):
         user = self.context['request'].user
         return user.is_authenticated and obj.favorites.filter(id=user.id).exists()
 
-    
+    #  def update(self, instance, validated_data):
+    #     # Handle partial updates
+    #     instance.title = validated_data.get('title', instance.title)
+    #     instance.album = validated_data.get('album', instance.album)
+    #     instance.lyrics = validated_data.get('lyrics', instance.lyrics)
+    #     instance.save()
+    #     return instance 
         
 
 class PlaylistSerializer(serializers.ModelSerializer):
@@ -80,26 +91,21 @@ class PlaylistSerializer(serializers.ModelSerializer):
 
 class ProfileSerializer(serializers.ModelSerializer):
     user_id = serializers.ReadOnlyField(source='user.id')
-    picture = serializers.SerializerMethodField()
-    
     class Meta:
         model = Profile
-        fields = ['bio', 'user_id', 'birth_date', 'location', 'is_public', 'picture']
+        fields = ['bio','user_id', 'birth_date', 'location', 'is_public', 'picture',]
 
-    def get_picture(self, obj):
-        if obj.picture:
-            if hasattr(obj.picture, 'url'):
-                return obj.picture.url
-            elif isinstance(obj.picture, dict):
-                return obj.picture.get('secure_url') or obj.picture.get('url')
-            elif isinstance(obj.picture, str):
-                return obj.picture
-        return None
-    
     def create(self, validated_data):
-        user = self.context['request'].user
+        user = self.context['request'].user  # Access user from request
+        # Remove 'user' from validated_data if it exists
         profile = Profile.objects.create(user=user, **validated_data)
         return profile
+    def get_picture(self, obj):
+        if obj.picture:
+            request = self.context.get('request')
+            return request.build_absolute_uri(obj.picture.url) if request else obj.picture.url
+        return None
+
 class CommentSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
     track = TrackSerializer(read_only=True)
