@@ -42,9 +42,10 @@ ALLOWED_HOSTS = [
 
 
 CORS_ALLOW_HEADERS =[
-    'acces-control-allow-origin',
+    'access-control-allow-origin',
     'content-type',
-    'Authorization', 'Content-Type',
+    'Authorization', 
+    'Content-Type',
 ]
 CORS_EXPOSE_HEADERS = ['Content-Type', 'X-CSRFToken']
 CORS_ALLOW_CREDENTIALS = True
@@ -56,7 +57,7 @@ CORS_ALLOW_METHODS =[
     'POST',
     'PUT',
 ]
-CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_ALL_ORIGINS = False  # Disable this
 
 
 # Application definition
@@ -214,6 +215,14 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 DATA_UPLOAD_MAX_MEMORY_SIZE = 52428800  # 50MB
 FILE_UPLOAD_MAX_MEMORY_SIZE = 52428800
 DEFAULT_FILE_STORAGE = 'cloudinary_storage.storage.MediaCloudinaryStorage'
+
+
+cloudinary.config(
+    cloud_name='dxdmobj4v',
+    api_key='646695939138698',
+    api_secret='a1KZpv5H1H5f5-91X_3tcAUYzmo',
+    secure=True
+)
 
 CLOUDINARY_STORAGE = {
     'CLOUD_NAME': 'dxdmobj4v',
