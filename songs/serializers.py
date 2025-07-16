@@ -3,7 +3,8 @@ from .models import User
 from .models import User,Track,Playlist,Profile,LiveEvent, Comment,Like,Category,SocialPost,PostLike,PostComment,PostSave,Notification,Church,Choir,Group,Videostudio,Choir, GroupMember, GroupJoinRequest, GroupPost,GroupPostAttachment,ProductCategory,ProductImage,Product,CartItem,Cart,OrderItem,Order,ProductReview,Wishlist
 import re
 from django.utils import timezone
-
+import logging
+logger = logging.getLogger(__name__)
 
 class CloudinaryFieldSerializer(serializers.Field):
     def to_representation(self, value):
@@ -11,11 +12,16 @@ class CloudinaryFieldSerializer(serializers.Field):
             return None
         
         try:
+            # Handle different Cloudinary response formats
             if isinstance(value, dict):
                 return value.get('secure_url') or value.get('url')
             
             if hasattr(value, 'url'):
                 return value.url
+            
+            # Handle string URLs
+            if isinstance(value, str):
+                return value
                 
             return str(value)
         except Exception as e:
@@ -23,116 +29,22 @@ class CloudinaryFieldSerializer(serializers.Field):
             return None
     
     def to_internal_value(self, data):
+        if not data:
+            return None
+            
         try:
             if isinstance(data, str) and data.startswith(('http://', 'https://')):
-                return data
-            return super().to_internal_value(data)
+                # Validate it's a Cloudinary URL
+                if 'res.cloudinary.com' in data:
+                    return data
+                else:
+                    raise serializers.ValidationError("Only Cloudinary URLs are allowed")
+            
+            return data
         except Exception as e:
             logger.error(f"Error processing Cloudinary input: {str(e)}")
             raise serializers.ValidationError("Invalid file data")
-class UserSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True)
-    avatar = CloudinaryFieldSerializer(read_only=True)
-    
-    followers_count = serializers.SerializerMethodField()
-    following_count = serializers.SerializerMethodField()
-    is_following = serializers.SerializerMethodField()
-    class Meta:
-        model = User
-        fields = ('id', 'username', 'email',  'password','profile','followers_count', 'following_count', 'is_following')
-    
-    def get_followers_count(self, obj):
-        return obj.followers.count()
 
-    def get_following_count(self, obj):
-        return obj.followed_by.count()
-
-    def get_is_following(self, obj):
-        request = self.context.get('request')
-        if request and request.user.is_authenticated:
-            return obj.followers.filter(id=request.user.id).exists()
-        return False
-    def create(self, validated_data):
-        user = User.objects.create_user(
-            username=validated_data['username'],
-            email=validated_data['email'],
-            password=validated_data['password'],
-            # is_artist=validated_data.get('is_artist', False)
-        )
-        return user
-class TrackSerializer(serializers.ModelSerializer):
-     likes_count = serializers.SerializerMethodField()
-     is_liked = serializers.SerializerMethodField()
-    #  favorite = serializers.SerializerMethodField()
-     artist = UserSerializer(read_only=True)  # Include full artist detai
-     is_owner = serializers.SerializerMethodField() 
-     audio_file = CloudinaryFieldSerializer(read_only=True)
-     cover_image = CloudinaryFieldSerializer(read_only=True)
-     class Meta:
-        model = Track
-        fields = [
-            'id', 'title', 'artist', 'album', 'audio_file','is_owner',
-            'cover_image', 'lyrics', 'slug', 
-            'views', 'downloads','likes_count','is_liked', 'created_at', 'updated_at'
-        ]
-        read_only_fields = ['artist', 'slug', 'views', 'downloads', 'created_at', 'updated_at']
-     def get_favorite(self, obj):
-        user = self.context['request'].user
-        return Like.objects.filter(user=user, track=obj).exists()
-     def get_likes_count(self, obj):
-      return obj.likes.count()
-     def get_is_liked(self, obj):
-        user = self.context['request'].user
-        if user.is_authenticated:
-            return obj.likes.filter(user=user).exists()
-        return False
-    #  def get_serializer_context(self):
-    #     context = super().get_serializer_context()
-    #     context['request'] = self.request
-    #     # Add owner flag for direct API use
-    #     if self.action == 'retrieve':
-    #         context['is_owner'] = self.get_object().artist == self.request.user
-    #     return context
-     def get_is_owner(self, obj):
-        request = self.context.get('request')
-        return request and obj.artist == request.user
-     def get_is_favorite(self, obj):
-        user = self.context['request'].user
-        return user.is_authenticated and obj.favorites.filter(id=user.id).exists()
-
-    #  def update(self, instance, validated_data):
-    #     # Handle partial updates
-    #     instance.title = validated_data.get('title', instance.title)
-    #     instance.album = validated_data.get('album', instance.album)
-    #     instance.lyrics = validated_data.get('lyrics', instance.lyrics)
-    #     instance.save()
-    #     return instance 
-        
-
-class PlaylistSerializer(serializers.ModelSerializer):
-    user = UserSerializer(read_only=True)
-    tracks = TrackSerializer(many=True, read_only=True)
-    class Meta:
-        model = Playlist
-        fields = ('id', 'name', 'user', 'tracks', 'created_at', 'updated_at')
-
-
-# class ProfileSerializer(serializers.ModelSerializer):
-#     user_id = serializers.ReadOnlyField(source='user.id')
-#     class Meta:
-#         model = Profile
-#         fields = ['bio','user_id', 'birth_date', 'location', 'is_public', 'picture',]
-
-#     def create(self, validated_data):
-#         user = self.context['request'].user  # Access user from request
-#         # Remove 'user' from validated_data if it exists
-#         profile = Profile.objects.create(user=user, **validated_data)
-#         return profile
-#     def get_picture(self, obj):
-#         if obj.picture:
-#             request = self.context.get('request')
-#             return request.build_absolute_uri(obj.picture.url) if request else obj.picture.url
-#         return None
 class ProfileSerializer(serializers.ModelSerializer):
     user_id = serializers.ReadOnlyField(source='user.id')
     picture = CloudinaryFieldSerializer(required=False)
@@ -173,6 +85,99 @@ class ProfileSerializer(serializers.ModelSerializer):
         except Exception as e:
             print(f"Profile creation error: {e}")
             raise serializers.ValidationError("Profile creation failed")
+class UserSerializer(serializers.ModelSerializer):
+    password = serializers.CharField(write_only=True)
+    avatar = CloudinaryFieldSerializer(read_only=True)
+    profile = ProfileSerializer(read_only=True)
+    social_posts = serializers.SerializerMethodField()
+    followers_count = serializers.SerializerMethodField()
+    following_count = serializers.SerializerMethodField()
+    is_following = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = User
+        fields = [
+            'id', 'username', 'email', 'password', 'avatar',
+            'profile', 'social_posts', 'followers_count',
+            'following_count', 'is_following'
+        ]
+        extra_kwargs = {
+            'password': {'write_only': True},
+            'email': {'required': True}
+        }
+    
+    def get_social_posts(self, obj):
+        # Add pagination or limit
+        posts = obj.social_posts.select_related('user').prefetch_related('likes', 'comments')[:5]
+        return SocialPostSerializer(posts, many=True, context=self.context).data
+    
+    def get_followers_count(self, obj):
+        return getattr(obj, 'followers_count', obj.followers.count())
+    
+    def get_following_count(self, obj):
+        return getattr(obj, 'followed_by_count', obj.followed_by.count())
+    
+    def get_is_following(self, obj):
+        request = self.context.get('request')
+        if request and request.user.is_authenticated and request.user != obj:
+            return obj.followers.filter(id=request.user.id).exists()
+        return False
+    
+    def create(self, validated_data):
+        password = validated_data.pop('password')
+        user = User.objects.create_user(password=password, **validated_data)
+        return user
+class TrackSerializer(serializers.ModelSerializer):
+     likes_count = serializers.SerializerMethodField()
+     is_liked = serializers.SerializerMethodField()
+    #  favorite = serializers.SerializerMethodField()
+     artist = UserSerializer(read_only=True)  # Include full artist detai
+     is_owner = serializers.SerializerMethodField() 
+     audio_file = CloudinaryFieldSerializer(read_only=True)
+     cover_image = CloudinaryFieldSerializer(read_only=True)
+     class Meta:
+        model = Track
+        fields = [
+            'id', 'title', 'artist', 'album', 'audio_file','is_owner',
+            'cover_image', 'lyrics', 'slug', 
+            'views', 'downloads','likes_count','is_liked', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['artist', 'slug', 'views', 'downloads', 'created_at', 'updated_at']
+        extra_kwargs = {
+            'title': {'required': True, 'max_length': 200},
+            'lyrics': {'allow_blank': True}
+        }
+     def validate_title(self, value):
+        if not value or not value.strip():
+            raise serializers.ValidationError("Title cannot be empty")
+        return value.strip()
+     def get_favorite(self, obj):
+        user = self.context['request'].user
+        return Like.objects.filter(user=user, track=obj).exists()
+     def get_likes_count(self, obj):
+      return obj.likes.count()
+     def get_is_liked(self, obj):
+        user = self.context['request'].user
+        if user.is_authenticated:
+            return obj.likes.filter(user=user).exists()
+        return False
+  
+     def get_is_owner(self, obj):
+        request = self.context.get('request')
+        return request and obj.artist == request.user
+     def get_is_favorite(self, obj):
+        user = self.context['request'].user
+        return user.is_authenticated and obj.favorites.filter(id=user.id).exists()
+
+
+class PlaylistSerializer(serializers.ModelSerializer):
+    user = UserSerializer(read_only=True)
+    tracks = TrackSerializer(many=True, read_only=True)
+    class Meta:
+        model = Playlist
+        fields = ('id', 'name', 'user', 'tracks', 'created_at', 'updated_at')
+
+
 
 class CommentSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
@@ -280,55 +285,6 @@ class PostSaveSerializer(serializers.ModelSerializer):
         model = PostSave
         fields = ['id', 'user', 'post', 'created_at']
         read_only_fields = ['user', 'post', 'created_at']
-
-
-# Update UserSerializer to include social posts
-class UserSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True)
-    avatar = CloudinaryFieldSerializer(read_only=True)
-    social_posts = serializers.SerializerMethodField()
-    profile = ProfileSerializer(read_only=True)
-    followers_count = serializers.SerializerMethodField()
-    following_count = serializers.SerializerMethodField()
-    is_following = serializers.SerializerMethodField()
-
-    class Meta:
-        model = User
-        fields = (
-            'id', 'username', 'email', 'password', 
-            'social_posts', 'profile','followers_count',
-            'following_count', 'is_following'
-        )
-
-    def get_followers_count(self, obj):
-        return obj.followers.count()
-
-    def get_following_count(self, obj):
-        return obj.followed_by.count()
-
-    def get_is_following(self, obj):
-        request = self.context.get('request')
-        if request and request.user.is_authenticated:
-            return obj.followers.filter(id=request.user.id).exists()
-        return False
-
-
-
-
-
-
-    def get_social_posts(self, obj):
-        posts = obj.social_posts.all()[:5]  # Get latest 5 posts
-        return SocialPostSerializer(posts, many=True, context=self.context).data
-
-    def create(self, validated_data):
-        user = User.objects.create_user(
-            username=validated_data['username'],
-            email=validated_data['email'],
-            password=validated_data['password'],
-        )
-        return user
-
 
 
 class NotificationSerializer(serializers.ModelSerializer):

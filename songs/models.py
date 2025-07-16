@@ -123,7 +123,8 @@ class Category(models.Model):
 class Profile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
     # picture = models.ImageField(upload_to='profiles/', blank=True, null=True)
-    picture = CloudinaryField('image', folder='profiles/', blank=True, null=True)
+    picture = CloudinaryField('image', folder='profiles/',transformation=[
+        {'width': 400, 'height': 400, 'crop': 'fill', 'gravity': 'face'}])
 
     bio = models.TextField(blank=True, null=True)
     birth_date = models.DateField(blank=True, null=True)
@@ -148,6 +149,9 @@ class SocialPost(models.Model):
     media_file = CloudinaryField(
         resource_type='auto',
         folder='social_media/',
+        transformation=[
+        {'quality': 'auto', 'fetch_format': 'auto'},
+        {'width': 1080, 'height': 1080, 'crop': 'limit'}],
         validators=[
             FileExtensionValidator(
                 allowed_extensions=['mp4', 'mov', 'avi', 'jpg', 'jpeg', 'png']
