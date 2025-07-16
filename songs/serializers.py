@@ -33,13 +33,23 @@ class CloudinaryFieldSerializer(serializers.Field):
             return None
             
         try:
-            if isinstance(data, str) and data.startswith(('http://', 'https://')):
-                # Validate it's a Cloudinary URL
+            # Accept either URL or public_id
+            if isinstance(data, str):
+                # If it's a URL, extract public_id
                 if 'res.cloudinary.com' in data:
-                    return data
-                else:
-                    raise serializers.ValidationError("Only Cloudinary URLs are allowed")
-            
+                    # Extract public_id from URL
+                    path = urlparse(data).path
+                    parts = path.split('/')
+                    # Find index after 'upload'
+                    try:
+                        upload_index = parts.index('upload') + 2
+                        public_id = '/'.join(parts[upload_index:])
+                        # Remove file extension
+                        return os.path.splitext(public_id)[0]
+                    except ValueError:
+                        return data
+                # Otherwise assume it's public_id
+                return data
             return data
         except Exception as e:
             logger.error(f"Error processing Cloudinary input: {str(e)}")
@@ -133,8 +143,8 @@ class TrackSerializer(serializers.ModelSerializer):
     #  favorite = serializers.SerializerMethodField()
      artist = UserSerializer(read_only=True)  # Include full artist detai
      is_owner = serializers.SerializerMethodField() 
-     audio_file = CloudinaryFieldSerializer(read_only=True)
-     cover_image = CloudinaryFieldSerializer(read_only=True)
+     audio_file = CloudinaryFieldSerializer()
+     cover_image = CloudinaryFieldSerializer(required=False)
      class Meta:
         model = Track
         fields = [
@@ -143,10 +153,10 @@ class TrackSerializer(serializers.ModelSerializer):
             'views', 'downloads','likes_count','is_liked', 'created_at', 'updated_at'
         ]
         read_only_fields = ['artist', 'slug', 'views', 'downloads', 'created_at', 'updated_at']
-        extra_kwargs = {
-            'title': {'required': True, 'max_length': 200},
-            'lyrics': {'allow_blank': True}
-        }
+        # extra_kwargs = {
+        #     'title': {'required': True, 'max_length': 200},
+        #     'lyrics': {'allow_blank': True}
+        # }
      def validate_title(self, value):
         if not value or not value.strip():
             raise serializers.ValidationError("Title cannot be empty")
