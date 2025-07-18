@@ -10,6 +10,8 @@ from django.utils import timezone
 from urllib.parse import urlparse, parse_qs
 import re
 from cloudinary.models import CloudinaryField
+import os
+
 
 
 # Custom User Model
@@ -123,8 +125,12 @@ class Category(models.Model):
 class Profile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
     # picture = models.ImageField(upload_to='profiles/', blank=True, null=True)
-    picture = CloudinaryField('image', folder='profiles/',transformation=[
-        {'width': 400, 'height': 400, 'crop': 'fill', 'gravity': 'face'}])
+    picture = CloudinaryField(
+    'image',
+    folder='profiles/',
+    default='https://res.cloudinary.com/YOUR_CLOUD_NAME/image/upload/v1234567890/profiles/default.jpg',
+    transformation=[{'width': 400, 'height': 400, 'crop': 'fill', 'gravity': 'face'}])
+
 
     bio = models.TextField(blank=True, null=True)
     birth_date = models.DateField(blank=True, null=True)
@@ -173,6 +179,8 @@ class SocialPost(models.Model):
         blank=True,
         help_text="Duration for video posts (max 1 minute)"
     )
+    width = models.IntegerField(null=True, blank=True)
+    height = models.IntegerField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

@@ -212,7 +212,6 @@ class CategorySerializer(serializers.ModelSerializer):
 
 
 # Add these new serializers after your existing ones
-
 class SocialPostSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
     song = TrackSerializer(read_only=True)
@@ -220,27 +219,35 @@ class SocialPostSerializer(serializers.ModelSerializer):
     comments_count = serializers.SerializerMethodField()
     is_liked = serializers.SerializerMethodField()
     is_saved = serializers.SerializerMethodField()
-    media_file = CloudinaryFieldSerializer(read_only=True)
+    media_url = serializers.SerializerMethodField()
     can_edit = serializers.SerializerMethodField()
 
     class Meta:
         model = SocialPost
         fields = [
             'id', 'user', 'content_type', 'media_file', 'media_url', 'song',
-            'caption', 'tags', 'location', 'duration', 'created_at', 'updated_at',
-            'likes_count', 'comments_count', 'is_liked', 'is_saved','can_edit'
+            'caption', 'tags', 'location', 'duration', 'width', 'height',
+            'created_at', 'updated_at', 'likes_count', 'comments_count', 
+            'is_liked', 'is_saved', 'can_edit'
         ]
-        read_only_fields = ['user', 'created_at', 'updated_at','content_type', 'media_file']
+        read_only_fields = ['user', 'created_at', 'updated_at']
+        extra_kwargs = {
+            'media_file': {'write_only': True}
+        }
     
     def get_can_edit(self, obj):
         request = self.context.get('request')
         return request and request.user == obj.user
 
     def get_media_url(self, obj):
-        request = self.context.get('request')
-        if obj.media_file and request:
-            return CloudinaryFieldSerializer().to_representation(obj.media_file)
-        return None
+        if not obj.media_file:
+            return None
+            
+        # Handle both string public_id and Cloudinary resource
+        if isinstance(obj.media_file, str):
+            from cloudinary import CloudinaryImage
+            return str(CloudinaryImage(obj.media_file).build_url())
+        return str(obj.media_file.url) if hasattr(obj.media_file, 'url') else str(obj.media_file)
 
     def get_likes_count(self, obj):
         return obj.likes.count()
@@ -249,23 +256,52 @@ class SocialPostSerializer(serializers.ModelSerializer):
         return obj.comments.count()
 
     def get_is_liked(self, obj):
-        user = self.context.get('request').user
-        if user.is_authenticated:
-            return obj.likes.filter(user=user).exists()
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            return obj.likes.filter(user=request.user).exists()
         return False
 
     def get_is_saved(self, obj):
-        user = self.context.get('request').user
-        if user.is_authenticated:
-            return obj.saves.filter(user=user).exists()
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            return obj.saves.filter(user=request.user).exists()
         return False
 
     def validate(self, data):
-        if data.get('content_type') == 'video' and 'media_file' in data:
-            # Add video validation logic here
-            pass
+        if data.get('content_type') == 'video':
+            duration = data.get('duration')
+            if duration and duration > timedelta(minutes=1):
+                raise serializers.ValidationError("Video cannot exceed 1 minute")
         return data
 
+    def to_internal_value(self, data):
+        """Handle media_file as public_id string from Cloudinary"""
+        # Convert the data to internal format
+        internal_data = super().to_internal_value(data)
+        
+        # If media_file is provided as a string (Cloudinary public_id), store it directly
+        if 'media_file' in data and isinstance(data['media_file'], str):
+            internal_data['media_file'] = data['media_file']
+            
+        return internal_data
+
+    def create(self, validated_data):
+        """Create a new social post"""
+        return SocialPost.objects.create(**validated_data)
+
+    def update(self, instance, validated_data):
+        """Update an existing social post"""
+        # Don't allow updating media_file after creation
+        validated_data.pop('media_file', None)
+        return super().update(instance, validated_data)
+
+class SocialPostUploadSerializer(serializers.Serializer):
+    """Serializer for handling file uploads to Cloudinary"""
+    media_file = serializers.FileField()
+    caption = serializers.CharField(max_length=2200, required=False, allow_blank=True)
+    tags = serializers.CharField(max_length=200, required=False, allow_blank=True)
+    location = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    duration = serializers.DurationField(required=False, allow_null=True)
 
 class PostLikeSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)

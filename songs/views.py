@@ -149,54 +149,6 @@ class TrackUploadView(APIView):
                 )
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-class SocialPostUploadView(APIView):
-    parser_classes = [MultiPartParser]
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request):
-        serializer = SocialPostUploadSerializer(data=request.data)
-        if serializer.is_valid():
-            try:
-                # Determine resource type
-                content_type = 'video' if serializer.validated_data['media_file'].content_type.startswith('video/') else 'image'
-                
-                # Upload to Cloudinary
-                result = upload(
-                    serializer.validated_data['media_file'],
-                    folder='social_media',
-                    resource_type='auto',
-                    transformation=[
-                        {'quality': 'auto'},
-                        {'fetch_format': 'auto'}
-                    ]
-                )
-                
-                # Create post
-                post_data = {
-                    'user': request.user.id,
-                    'content_type': content_type,
-                    'media_file': result['public_id'],
-                    'caption': request.data.get('caption', ''),
-                    'tags': request.data.get('tags', ''),
-                    'location': request.data.get('location', ''),
-                    'duration': request.data.get('duration', None)
-                }
-                
-                post_serializer = SocialPostSerializer(data=post_data, context={'request': request})
-                if post_serializer.is_valid():
-                    post = post_serializer.save()
-                    return Response(post_serializer.data, status=status.HTTP_201_CREATED)
-                return Response(post_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-                
-            except CloudinaryError as e:
-                return Response(
-                    {'error': str(e)},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-
-
 class SignUpView(APIView):
     permission_classes = [AllowAny]
 
@@ -575,97 +527,69 @@ class FavoriteTracksView(APIView):
         return Response(serializer.data, status=200)
 
 class SocialPostViewSet(viewsets.ModelViewSet):
-    queryset = SocialPost.objects.all()
+    queryset = SocialPost.objects.all().order_by('-created_at')
     serializer_class = SocialPostSerializer
     permission_classes = [permissions.IsAuthenticatedOrReadOnly]
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
 
     def get_permissions(self):
-        # For update/delete actions, require authentication
         if self.action in ['update', 'partial_update', 'destroy']:
             return [permissions.IsAuthenticated()]
-        # For other actions, use default permissions
         return super().get_permissions()
-
 
     def perform_create(self, serializer):
         try:
-            media_file = self.request.FILES.get('media_file')
-            content_type = self.request.data.get('content_type')
-            caption = self.request.data.get('caption')
-
-            # Validate required fields
-            if not media_file:
-                raise ValidationError({"media_file": "Media file is required"})
-            if not content_type:
-                raise ValidationError({"content_type": "Content type is required"})
-            if not caption:
-                raise ValidationError({"caption": "Caption is required"})
-
-            # Verify file signature
-            allowed_types = {
-                'image': ['image/jpeg', 'image/png', 'image/jpg'],
-                'video': ['video/mp4', 'video/quicktime']
-            }
-            
-            # Validate content type
-            if content_type not in allowed_types:
-                raise ValidationError({
-                    "content_type": "Invalid content type. Must be 'image' or 'video'"
-                })
-            
-            # Validate file type matches content type
-            if media_file.content_type not in allowed_types[content_type]:
-                raise ValidationError({
-                    "media_file": f"Invalid {content_type} format. Allowed: {', '.join(allowed_types[content_type])}"
-                })
-
-            # Save the post with media file
-            post = serializer.save(
-                user=self.request.user,
-                media_file=media_file,
-                content_type=content_type,
-                caption=caption
-            )
-
-            logger.info(f"Successfully created post ID {post.id}")
+            # Create the post with the authenticated user
+            post = serializer.save(user=self.request.user)
+            logger.info(f"Created post ID {post.id} with media_file: {post.media_file}")
             return post
 
         except ValidationError as ve:
-            logger.warning(f"Validation error: {ve.detail}")
+            logger.warning(f"Validation error: {ve}")
             raise
         except Exception as e:
             logger.error(f"Post creation failed: {str(e)}", exc_info=True)
             raise ValidationError({
-                "non_field_errors": "Failed to create post. Please try again."
+                "non_field_errors": [f"Failed to create post: {str(e)}"]
             })
+
     def update(self, request, *args, **kwargs):
-        instance = self.get_object()  # Get the post being updated
+        instance = self.get_object()
         
-        # Check if requesting user is the post owner
         if instance.user != request.user:
             return Response(
                 {"error": "You can only edit your own posts."},
-                status=status.HTTP_403_FORBIDDEN  # Return 403 Forbidden if not owner
+                status=status.HTTP_403_FORBIDDEN
             )
         
-        # Proceed with default update behavior if owner
-        return super().update(request, *args, **kwargs)
-
-    # Custom destroy method to add ownership validation
-    def destroy(self, request, *args, **kwargs):
-        instance = self.get_object()  # Get the post being deleted
+        # Only allow updating certain fields for existing posts
+        allowed_fields = ['caption', 'tags', 'location']
+        filtered_data = {k: v for k, v in request.data.items() if k in allowed_fields}
         
-        # Check if requesting user is the post owner
+        serializer = self.get_serializer(instance, data=filtered_data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        
+        return Response(serializer.data)
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        
         if instance.user != request.user:
             return Response(
                 {"error": "You can only delete your own posts."},
-                status=status.HTTP_403_FORBIDDEN  # Return 403 Forbidden if not owner
+                status=status.HTTP_403_FORBIDDEN
             )
         
-        # Delete the post if owner
+        try:
+            # Delete from Cloudinary if media_file exists
+            if instance.media_file:
+                destroy(str(instance.media_file))
+        except Exception as e:
+            logger.error(f"Failed to delete Cloudinary asset: {str(e)}")
+        
         instance.delete()
-        return Response(status=status.HTTP_204_NO_CONTENT)  # Return success with no content
-     
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated])
     def like(self, request, pk=None):
@@ -685,13 +609,15 @@ class SocialPostViewSet(viewsets.ModelViewSet):
             liked = True
             
             # Create notification only when liking (not unliking)
-            Notification.objects.create(
-                recipient=post.user,
-                sender=user,
-                message=f"{user.username} liked your post",
-                notification_type='like',
-                post=post
-            )
+            if user != post.user:  # Don't notify self
+                Notification.objects.create(
+                    recipient=post.user,
+                    sender=user,
+                    message=f"{user.username} liked your post",
+                    notification_type='like',
+                    post=post
+                )
+        
         # Get updated like count
         likes_count = PostLike.objects.filter(post=post).count()
         
@@ -707,7 +633,10 @@ class SocialPostViewSet(viewsets.ModelViewSet):
         serializer = PostCommentSerializer(data=request.data, context={'request': request})
         
         if serializer.is_valid():
-            if request.user != post.user:  # Avoid notifying self
+            comment = serializer.save(user=request.user, post=post)
+            
+            # Create notification if commenter is not the post owner
+            if request.user != post.user:
                 Notification.objects.create(
                     recipient=post.user,
                     sender=request.user,
@@ -715,32 +644,35 @@ class SocialPostViewSet(viewsets.ModelViewSet):
                     notification_type='comment',
                     post=post
                 )
-            serializer.save(user=request.user, post=post)
+            
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-    @action(detail=True, methods=['post'])
+    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated])
     def save_post(self, request, pk=None):
         post = self.get_object()
         user = request.user
         
-        if PostSave.objects.filter(user=user, post=post).exists():
+        save_obj, created = PostSave.objects.get_or_create(user=user, post=post)
+        
+        if created:
             return Response(
-                {"error": "You have already saved this post."}, 
-                status=status.HTTP_400_BAD_REQUEST
+                {"status": "Post saved", "is_saved": True},
+                status=status.HTTP_201_CREATED
             )
-            
-        PostSave.objects.create(user=user, post=post)
-        return Response(
-            {"status": "Post saved"},
-            status=status.HTTP_201_CREATED
-        )
+        else:
+            # Toggle save - remove if already saved
+            save_obj.delete()
+            return Response(
+                {"status": "Post unsaved", "is_saved": False},
+                status=status.HTTP_200_OK
+            )
 
     @action(detail=True, methods=['get'])
     def share(self, request, pk=None):
         post = self.get_object()
-        share_url = request.build_absolute_uri(post.get_absolute_url())
+        share_url = request.build_absolute_uri(f'/posts/{post.id}/')
         return Response(
             {"share_url": share_url},
             status=status.HTTP_200_OK
@@ -756,8 +688,60 @@ class SocialPostViewSet(viewsets.ModelViewSet):
             )
             
         return Response({
-            'download_url': CloudinaryFieldSerializer().to_representation(post.media_file)
-        })
+            'public_id': str(post.media_file),
+            'content_type': post.content_type,
+            'media_url': post.media_file.url if hasattr(post.media_file, 'url') else str(post.media_file)
+        }, status=status.HTTP_200_OK)
+
+
+class SocialPostUploadView(APIView):
+    """Alternative view for handling file uploads directly to Cloudinary"""
+    parser_classes = [MultiPartParser]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = SocialPostUploadSerializer(data=request.data)
+        if serializer.is_valid():
+            try:
+                # Determine content type from file
+                media_file = serializer.validated_data['media_file']
+                content_type = 'video' if media_file.content_type.startswith('video/') else 'image'
+                
+                # Upload to Cloudinary
+                result = upload(
+                    media_file,
+                    folder='social_media',
+                    resource_type='auto',
+                    transformation=[
+                        {'quality': 'auto'},
+                        {'fetch_format': 'auto'}
+                    ]
+                )
+                
+                # Create post with Cloudinary public_id
+                post_data = {
+                    'content_type': content_type,
+                    'media_file': result['public_id'],
+                    'caption': serializer.validated_data.get('caption', ''),
+                    'tags': serializer.validated_data.get('tags', ''),
+                    'location': serializer.validated_data.get('location', ''),
+                    'duration': serializer.validated_data.get('duration', None),
+                    'width': result.get('width'),
+                    'height': result.get('height'),
+                }
+                
+                post_serializer = SocialPostSerializer(data=post_data, context={'request': request})
+                if post_serializer.is_valid():
+                    post = post_serializer.save(user=request.user)
+                    return Response(post_serializer.data, status=status.HTTP_201_CREATED)
+                return Response(post_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+                
+            except CloudinaryError as e:
+                return Response(
+                    {'error': str(e)},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 class PostLikeViewSet(viewsets.ModelViewSet):
