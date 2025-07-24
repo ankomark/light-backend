@@ -24,6 +24,7 @@ from rest_framework.parsers import MultiPartParser, FormParser,JSONParser
 from django.utils.decorators import method_decorator
 from django.views.decorators.cache import cache_control
 from cloudinary.uploader import upload
+from cloudinary.uploader import destroy 
 from cloudinary.exceptions import Error as CloudinaryError
 from .models import User,SocialPost,PostSave,PostComment, PostLike, LiveEvent, Track, Playlist, Profile, Comment, Like, Category, Notification,Church,Videostudio, Choir, Group, GroupMember, GroupJoinRequest, GroupPost,GroupPostAttachment,ProductCategory,ProductImage,Product,CartItem,Cart,OrderItem,Order,ProductReview,Wishlist
 from .serializers import (
@@ -64,6 +65,8 @@ from .serializers import (
 import logging
 import time
 from django.utils import timezone
+from django.conf import settings
+from django.db.models import Count
 from datetime import timedelta
 logger = logging.getLogger(__name__)
 
@@ -527,10 +530,29 @@ class FavoriteTracksView(APIView):
         return Response(serializer.data, status=200)
 
 class SocialPostViewSet(viewsets.ModelViewSet):
+    queryset = SocialPost.objects.select_related(
+        'user', 
+        # 'user__avatar',  
+        'song',
+        'song__artist'
+    ).prefetch_related(
+        'likes',
+        'likes__user',
+        'comments',
+        'comments__user',
+        'saves'
+    ).order_by('-created_at')
     queryset = SocialPost.objects.all().order_by('-created_at')
     serializer_class = SocialPostSerializer
     permission_classes = [permissions.IsAuthenticatedOrReadOnly]
     parser_classes = [JSONParser, MultiPartParser, FormParser]
+    
+    # Add this to ensure request context is available in serializers
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context['request'] = self.request
+        return context
+    
 
     def get_permissions(self):
         if self.action in ['update', 'partial_update', 'destroy']:
@@ -540,18 +562,33 @@ class SocialPostViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         try:
             # Create the post with the authenticated user
+            logger.info(f"Creating post with data: {serializer.validated_data}")
             post = serializer.save(user=self.request.user)
-            logger.info(f"Created post ID {post.id} with media_file: {post.media_file}")
+            if post.media_file:
+                logger.info(f"Created post ID {post.id} with media_file: {post.media_file}")
+                logger.info(f"Media type: {post.content_type}, Size: {post.width}x{post.height}")
             return post
 
         except ValidationError as ve:
             logger.warning(f"Validation error: {ve}")
             raise
         except Exception as e:
+            logger.exception("Post creation failed with exception:")
             logger.error(f"Post creation failed: {str(e)}", exc_info=True)
+            # Log the serializer data that caused the error
+            logger.error(f"Error data: {serializer.validated_data}")
+            
+            # Also log the request data
+            logger.error(f"Request data: {self.request.data}")
             raise ValidationError({
                 "non_field_errors": [f"Failed to create post: {str(e)}"]
             })
+    def get_queryset(self):
+        return SocialPost.objects.annotate(
+            # Add annotations for counts to reduce queries
+            likes_count=Count('likes', distinct=True),
+            comments_count=Count('comments', distinct=True)
+        ).select_related('user', 'song').order_by('-created_at')
 
     def update(self, request, *args, **kwargs):
         instance = self.get_object()
@@ -582,14 +619,50 @@ class SocialPostViewSet(viewsets.ModelViewSet):
             )
         
         try:
-            # Delete from Cloudinary if media_file exists
+            # Delete from Cloudinary if media exists
             if instance.media_file:
-                destroy(str(instance.media_file))
+                # Get public_id from either CloudinaryResource or string
+                public_id = (
+                    instance.media_file.public_id 
+                    if hasattr(instance.media_file, 'public_id') 
+                    else str(instance.media_file))
+                
+                # If it's a URL, extract just the public_id
+                if 'res.cloudinary.com' in public_id:
+                    path = urlparse(public_id).path
+                    parts = path.split('/')
+                    try:
+                        upload_index = parts.index('upload') + 1
+                        public_id = '/'.join(parts[upload_index:])
+                        public_id = public_id.split('.')[0]  # Remove extension
+                    except ValueError:
+                        pass
+                
+                # Determine resource type from content_type
+                resource_type = 'video' if instance.content_type == 'video' else 'image'
+                
+                try:
+                    destroy(public_id, resource_type=resource_type)
+                    logger.info(f"Deleted Cloudinary {resource_type}: {public_id}")
+                except Exception as e:
+                    logger.error(f"Cloudinary deletion failed: {str(e)}")
+                    # Continue with DB deletion even if Cloudinary fails
+        
         except Exception as e:
-            logger.error(f"Failed to delete Cloudinary asset: {str(e)}")
+            logger.error(f"Error during post deletion: {str(e)}", exc_info=True)
         
         instance.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+    # Keep all your existing methods but add this optimization:
+    def list(self, request, *args, **kwargs):
+        # Add pagination and field selection
+        page = self.paginate_queryset(self.get_queryset())
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        
+        serializer = self.get_serializer(self.get_queryset(), many=True)
+        return Response(serializer.data)
 
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated])
     def like(self, request, pk=None):
@@ -712,10 +785,10 @@ class SocialPostUploadView(APIView):
                     media_file,
                     folder='social_media',
                     resource_type='auto',
-                    transformation=[
-                        {'quality': 'auto'},
-                        {'fetch_format': 'auto'}
-                    ]
+                    # transformation=[
+                    #     {'quality': 'auto'},
+                    #     {'fetch_format': 'auto'}
+                    # ]
                 )
                 
                 # Create post with Cloudinary public_id
