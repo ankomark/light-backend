@@ -113,33 +113,59 @@ class CloudinaryFieldSerializer(serializers.Field):
 
 class ProfileSerializer(serializers.ModelSerializer):
     user_id = serializers.ReadOnlyField(source='user.id')
-    picture = CloudinaryFieldSerializer(required=False)
+    picture_url = serializers.SerializerMethodField()
+    username = serializers.ReadOnlyField(source='user.username')
     
     class Meta:
         model = Profile
-        fields = ['bio', 'user_id', 'birth_date', 'location', 'is_public', 'picture']
+        fields = ['bio', 'user_id','username', 'birth_date', 'location', 'is_public', 'picture','picture_url']
+        read_only_fields = ['user_id', 'username', 'picture_url']
         extra_kwargs = {
             'picture': {'write_only': True}  # Only needed for uploads
         }
 
-    def get_picture(self, obj):
-        """Handles all possible Cloudinary response formats"""
+    def get_picture_url(self, obj):
+        """
+        Returns optimized profile picture URL with consistent transformations
+        Handles three formats:
+        1. Cloudinary resource dict
+        2. CloudinaryField object
+        3. Public ID string
+        """
         if not obj.picture:
             return None
             
         try:
-            # Case 1: Cloudinary resource dictionary
-            if isinstance(obj.picture, dict):
-                return obj.picture.get('secure_url') or obj.picture.get('url')
+            # Default transformation parameters
+            width = self.context.get('picture_width', 200)
+            height = self.context.get('picture_height', 200)
+            crop = self.context.get('picture_crop', 'fill')
+            gravity = self.context.get('picture_gravity', 'face')
+            quality = self.context.get('picture_quality', 'auto')
             
-            # Case 2: CloudinaryField with url property
-            if hasattr(obj.picture, 'url'):
-                return obj.picture.url
+            # Handle Cloudinary resource dict
+            if isinstance(obj.picture, dict):
+                if 'secure_url' in obj.picture:
+                    base_url = obj.picture['secure_url']
+                    return f"{base_url.split('/upload/')[0]}/upload/w_{width},h_{height},c_{crop},g_{gravity},q_{quality}/{base_url.split('/upload/')[1]}"
+                return None
                 
-            # Case 3: Direct URL string
-            return str(obj.picture)
+            # Handle CloudinaryField object
+            elif hasattr(obj.picture, 'url'):
+                base_url = obj.picture.url
+                return f"{base_url.split('/upload/')[0]}/upload/w_{width},h_{height},c_{crop},g_{gravity},q_{quality}/{base_url.split('/upload/')[1]}"
+                
+            # Handle public_id string
+            elif isinstance(obj.picture, str):
+                return (
+                    f"https://res.cloudinary.com/"
+                    f"{settings.CLOUDINARY_STORAGE['CLOUD_NAME']}/"
+                    f"image/upload/w_{width},h_{height},c_{crop},g_{gravity},q_{quality}/{obj.picture}"
+                )
+                
+            return None
         except Exception as e:
-            print(f"Error processing picture URL: {e}")
+            logger.error(f"Error processing picture URL: {str(e)}", exc_info=True)
             return None
 
     def create(self, validated_data):
@@ -151,26 +177,79 @@ class ProfileSerializer(serializers.ModelSerializer):
         except Exception as e:
             print(f"Profile creation error: {e}")
             raise serializers.ValidationError("Profile creation failed")
+
 class SimpleUserSerializer(serializers.ModelSerializer):
-    avatar_url = serializers.SerializerMethodField()
+    profile_picture = serializers.SerializerMethodField()
     
     class Meta:
         model = User
-        fields = ['id', 'username', 'avatar', 'avatar_url']
+        fields = ['id', 'username', 'profile_picture']
+        read_only_fields = ['id', 'username', 'profile_picture']
     
-    def get_avatar_url(self, obj):
-        if hasattr(obj, 'profile') and obj.profile.picture:
-            return obj.profile.picture.build_url(
-                width=50,
-                height=50,
-                crop='fill',
-                quality='auto',
-                fetch_format='auto'
+    def get_profile_picture(self, obj):
+        """
+        Returns optimized profile picture URL with consistent transformations
+        Handles three formats:
+        1. Cloudinary resource dict
+        2. CloudinaryField object
+        3. Public ID string
+        
+        Uses context parameters for customization (width, height, crop, etc.)
+        """
+        if not hasattr(obj, 'profile') or not obj.profile.picture:
+            return None
+            
+        try:
+            # Get transformation parameters from context or use defaults
+            width = self.context.get('picture_width', 50)  # Default smaller for lists
+            height = self.context.get('picture_height', 50)
+            crop = self.context.get('picture_crop', 'fill')
+            gravity = self.context.get('picture_gravity', 'face')
+            quality = self.context.get('picture_quality', 'auto')
+            
+            picture = obj.profile.picture
+            
+            # Handle Cloudinary resource dict
+            if isinstance(picture, dict):
+                if 'secure_url' in picture:
+                    base_url = picture['secure_url']
+                    return (
+                        f"{base_url.split('/upload/')[0]}/upload/"
+                        f"w_{width},h_{height},c_{crop},g_{gravity},q_{quality}/"
+                        f"{base_url.split('/upload/')[1]}"
+                    )
+                return None
+                
+            # Handle CloudinaryField object
+            elif hasattr(picture, 'url'):
+                base_url = picture.url
+                return (
+                    f"{base_url.split('/upload/')[0]}/upload/"
+                    f"w_{width},h_{height},c_{crop},g_{gravity},q_{quality}/"
+                    f"{base_url.split('/upload/')[1]}"
+                )
+                
+            # Handle public_id string
+            elif isinstance(picture, str):
+                return (
+                    f"https://res.cloudinary.com/"
+                    f"{settings.CLOUDINARY_STORAGE['CLOUD_NAME']}/"
+                    f"image/upload/"
+                    f"w_{width},h_{height},c_{crop},g_{gravity},q_{quality}/"
+                    f"{picture}"
+                )
+                
+            return None
+            
+        except Exception as e:
+            logger.error(
+                f"Error processing profile picture for user {obj.id}: {str(e)}",
+                exc_info=True
             )
-        return None
+            return None
 class UserSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True)
-    avatar = CloudinaryFieldSerializer(read_only=True)
+    profile_picture = serializers.SerializerMethodField() 
     profile = ProfileSerializer(read_only=True)
     social_posts = serializers.SerializerMethodField()
     followers_count = serializers.SerializerMethodField()
@@ -180,14 +259,23 @@ class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = [
-            'id', 'username', 'email', 'password', 'avatar',
+            'id', 'username', 'email', 'password',
             'profile', 'social_posts', 'followers_count',
-            'following_count', 'is_following'
+            'following_count', 'is_following','profile_picture'
         ]
         extra_kwargs = {
             'password': {'write_only': True},
             'email': {'required': True}
         }
+    def get_profile_picture(self, obj):
+        """Get optimized profile picture URL from associated profile"""
+        if hasattr(obj, 'profile') and obj.profile.picture:
+            # Reuse the transformation logic from ProfileSerializer
+            return ProfileSerializer(
+                obj.profile,
+                context=self.context
+            ).data.get('picture_url')
+        return None
     
     def get_social_posts(self, obj):
         posts = obj.social_posts.select_related('user').prefetch_related(
@@ -575,17 +663,22 @@ class PostSaveSerializer(serializers.ModelSerializer):
 
 
 class NotificationSerializer(serializers.ModelSerializer):
-    sender = UserSerializer(read_only=True)
+    sender = SimpleUserSerializer(read_only=True)
     post = SocialPostSerializer(read_only=True, required=False)
     track = TrackSerializer(read_only=True, required=False)
     related_comment = serializers.SerializerMethodField()
 
     class Meta:
         model = Notification
-        fields = ['id', 'sender', 'message', 'read', 'notification_type', 
-                 'post', 'track', 'created_at','related_comment']
+        fields = [
+            'id', 'sender', 'message', 'read', 
+            'notification_type', 'post', 'track', 
+            'created_at', 'related_comment'
+        ]
+    
     def get_related_comment(self, obj):
         if obj.notification_type == 'comment':
+            from .models import PostComment  # Import here to avoid circular imports
             comment = PostComment.objects.filter(
                 post=obj.post,
                 user=obj.sender
@@ -593,8 +686,35 @@ class NotificationSerializer(serializers.ModelSerializer):
             return comment.content if comment else None
         return None
 
-
-
+class SimpleUserSerializer(serializers.ModelSerializer):
+    profile_picture = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = User
+        fields = ['id', 'username', 'profile_picture']
+    
+    def get_profile_picture(self, obj):
+        """Get optimized profile picture URL"""
+        if hasattr(obj, 'profile') and obj.profile.picture:
+            picture = obj.profile.picture
+            
+            # Handle Cloudinary resource dict
+            if isinstance(picture, dict):
+                return picture.get('secure_url')
+            
+            # Handle CloudinaryField object
+            if hasattr(picture, 'url'):
+                return picture.url
+                
+            # Handle public_id string
+            if isinstance(picture, str):
+                return (
+                    f"https://res.cloudinary.com/"
+                    f"{settings.CLOUDINARY_STORAGE['CLOUD_NAME']}/"
+                    f"image/upload/w_50,h_50,c_fill/{picture}"
+                )
+        
+        return None
 class ChurchSerializer(serializers.ModelSerializer):
     image = CloudinaryFieldSerializer(read_only=True)
     created_by_username = serializers.CharField(source='created_by.username', read_only=True)
